@@ -2,12 +2,12 @@
 
 import { useState, useEffect, useRef } from 'react'
 import YouTube from 'react-youtube'
+//import * as deepl from 'deepl-node';
 
 export default function SubPlayer2(props) {
 	const {
 		videoId = '',
 	} = props
-
 
 	const playerContainer = useRef(null)
 	const [player, setPlayer] = useState(null)
@@ -15,21 +15,53 @@ export default function SubPlayer2(props) {
 	const [displayingSub, setDisplayingSub] = useState([])
 	const [isFullscreen, setIsFullscreen] = useState( false )
 	const [subTitles2, setSubTitles2] = useState([])
-
+  const [onImport, setOnImport] = useState(false)
+  const [onFilter, setOnFilter] = useState(false)
+  const [onInfo, setOnInfo] = useState(false)
+  const [jax, setJax] = useState('')
+  const [splited, setSplited] = useState([])
+  const [filter, setFilter] = useState('')
+  const [filteredSub, setFilteredSub] = useState([])
+  const [infoLoaded, setInfoLoaded] = useState(false)
+  //const authKey = "0b3711ce-a016-4f8b-a9ce-446d9e0db11a:fx"; // Replace with your key
+  //const translator = new deepl.Translator(authKey);
+    
 
 	useEffect(() => {
 		if ( ! isPlaying ) return;
 
 		const timeout = setInterval(() => {
 			let crTime = player.getCurrentTime()
-			setDisplayingSub( subTitles2.filter( item => ( item.startTime ) < crTime && ( item.endTime > crTime) ) )
+			setDisplayingSub( filteredSub.filter( item => ( item.startTime ) < crTime && ( item.endTime > crTime) ) )
 
 		}, 100);
 
 		return () => clearInterval(timeout);
 	},[isPlaying]);
 	
+  useEffect(() => {
+      setSplited( splitSrtByChar(subTitles2) )
+  },[subTitles2])
 
+  useEffect(() => { 
+    if ( infoLoaded == false && onInfo == true  ) {
+      retrieveVideoInfo()
+      setInfoLoaded(true)
+    }
+  }, [onInfo])
+
+  useEffect(() => {
+      const arrTxt = filter.split('\n')
+      setFilteredSub( 
+          subTitles2.map( (sub, idx) => ({
+              id: idx + 1,
+              startTime: sub.startTime,
+              endTime: sub.endTime,
+              text: arrTxt[idx] ? arrTxt[idx] : sub.text
+          }) ) 
+      )
+  },[subTitles2, filter])
+    
 	const onReady = (e) => {
 		console.log(`YouTube Player object for videoId: "${props.videoId}" has been saved to state.`);
 		setPlayer(e.target);
@@ -69,40 +101,159 @@ export default function SubPlayer2(props) {
 		}
 	}
 
-	return (
-        <div className='grid md:grid-cols-2'>
-            <div>
-                <textarea className='w-full h-screen ' onChange={ onSubtitleChange } />
-            </div>
-            <div className={` ${ isFullscreen ? 'fullscreen': '' }`} ref={playerContainer}>
-                <div className={`relative overflow-hidden bg-black text-gray-100`}>
-                    <div className="relative">
-                        <YouTube 
-                            className={`${ isFullscreen ? 'h-screen': '' } w-full md:h-auto relative`}
-                            iframeClassName={`${ isFullscreen ? 'h-screen': '' } w-full md:h-auto md:aspect-video`}
-                            videoId={videoId} 
-                            onReady={onReady} 
-                            // onPlay={onPlay} 
-                            // onPause={onPause}
-                            onPlay={ () => setIsPlaying(true) } 
-                            onPause={ () => setIsPlaying(false) }
-                            opts={opts}
-                        />
-                        <div className={`absolute w-full px-7 text-center bottom-12 leading-tight ${ isFullscreen ? 'text-[2vw]' : 'text-[2vw] md:text-[1.5vw]'}`}>
-                            { displayingSub.length > 0 && displayingSub.map( ( sub, idx ) => (
-                                <span className="subtitle bg-black/60 inline-block px-2" key={idx} dangerouslySetInnerHTML={{__html: sub.text}} />
-                            ) )}
-                        </div>
-                    </div>
-                    { isFullscreen && 
-                        <button className="absolute right-0 top-full" onClick={handleExitFullscreen}>Exit fullscreen</button>
-                    }
-                    { ! isFullscreen && 
-                        <div className="flex px-4 py-2">
+    const importJax = () => {
+        const el = document.querySelector('#srt-main')
+        el.value = jaxToSrt(jax)
+        el.dispatchEvent(new Event('change', { 'bubbles': true }))
+        setOnImport(false)
+    }
 
-                            <button className="whitespace-nowrap pl-3 underline ml-auto" onClick={setFullscreen}>Watch in fullscreen</button>
+    const jaxToSrt = (jax) => {
+
+        const srt = jax.split('\n').map( function(j,idx) {
+            const ele = j.split(']')
+            //console.log(ele)
+            const time = ele[0].replace('[', '').replaceAll('.', ',').split(' -> ')
+            //console.log(time)
+            
+    
+            return {
+                number: idx + 1,
+                startTime: time[0].length > 10 ? time[0] : '00:' + time[0],
+                endTime: time[1].length > 10 ? time[1] : '00:' + time[1],
+                text: ele[1],
+            } 
+        })
+        return srt.map( (j, i) => `${j.number}\n${j.startTime} --> ${j.endTime}\n${j.text}` ).join('\n\n')
+    }
+
+    async function translateSub()  {
+        //const raw = await translator.translateText(splited.join('\n'), null, 'en-US');
+        console.log(splited.map( (sarr) => sarr.join('\n') ).join('\n'))
+        const raw = await fetch('/api/deepl', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ text: splited.map( (sarr) => sarr.join('\n') ).join('\n')}),          
+        })
+        const res = await raw.json()
+        console.log(res)
+        document.querySelector('#filter').value = res.text
+    }
+
+    async function retrieveVideoInfo() {
+      const raw = await fetch('/api/youtube', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ videoId: props.videoId }),          
+      })
+      const res = await raw.json()
+      console.log(res)
+      document.querySelector('#ytinfo').value = res.text
+    }
+
+    const splitSrtByChar = (srt, n = 4000) => {
+        console.log(srt.length)
+        let counter = 0
+        let j = 0
+        let k = 0
+        let tempSrt = []
+        tempSrt[0] = []
+        for ( let i = 0; i < srt.length ; i++ ) {
+            counter += srt[i].text.length
+            tempSrt[j][k] = srt[i].text
+            k++
+            if ( counter > n ) {
+                counter = 0
+                j++
+                tempSrt[j] = []
+                k = 0
+            }
+        }
+        console.log(tempSrt)
+        return tempSrt
+    }
+            
+	return (
+        <div className="relative">
+            <div className={`${onImport ? 'fixed' : 'hidden'} w-full h-full top-0 left-0 z-10 bg-black/40 p-10`}>
+                <div>
+                    <textarea className="block w-full h-[500px] p-5" onChange={ (e) => setJax(e.target.value)}></textarea>
+                    <button className='bg-black text-white px-2' onClick={ (e) => importJax() }>Import</button>
+                    <button className='bg-black text-white px-2' onClick={ (e) => setOnImport(false) }>Cancel</button>
+                </div>
+
+            </div>
+            <div className={`${onFilter ? 'fixed' : 'hidden'} w-full h-full top-0 left-0 z-10 bg-black/40 p-10`}>
+                <div>
+                    <div className="grid grid-cols-2 gap-5">
+                        <div className='h-[500px] overflow-auto'>
+                            { splited.length > 0 && splited.map( (spSrt, index) => (
+                                <textarea className="p-5 mb-5 border w-full" key={index} value={ spSrt.join('\n') } readonly={ true } />
+                            ))}
                         </div>
-                    }
+                        <textarea className='h-[500px] p-5' id="filter" onChange={ (e) => setFilter(e.target.value) }>
+                        </textarea>
+                        <button className='bg-black text-white px-2' onClick={ translateSub }>Translate</button>
+                    </div>
+                    <button className='bg-black text-white px-2' onClick={ (e) => setOnFilter(false) }>Close</button>
+                </div>
+
+            </div>
+            <div className={`${onInfo ? 'fixed' : 'hidden'} w-full h-full top-0 left-0 z-10 bg-black/40 p-10`}>
+                <div>
+                    <div className="grid grid-cols-2 gap-5">
+                        <textarea className='h-[500px] p-5' id="ytinfo" >
+                        </textarea>                        
+                    </div>
+                    <button className='bg-black text-white px-2' onClick={ (e) => setOnInfo(false) }>Close</button>
+                </div>
+            </div>
+            <div className='grid md:grid-cols-2'>
+                <div className="relative h-screen">
+                    <textarea id="srt-main" className='relative w-full h-screen ' onChange={ onSubtitleChange } />
+                    <div  className='absolute left-5 bottom-5' >
+                        <button className='inline-block mr-2 bg-black text-white px-2'  onClick={ (e) => setOnImport(true) }>Import from Jax format</button>
+                        <button className='inline-block mr-2 bg-black text-white px-2'  onClick={ (e) => setOnFilter(true) }>Filter</button>
+                        <button className='inline-block mr-2 bg-black text-white px-2'  onClick={ (e) => setOnInfo(true) }>Info</button>
+                    </div>
+                </div>
+                <div>
+                    <div className={` ${ isFullscreen ? 'fullscreen': '' }`} ref={playerContainer}>
+                        <div className={`relative overflow-hidden bg-black text-gray-100`}>
+                            <div className="relative font-[family-name:var(--font-geist-sans)]">
+                                <YouTube 
+                                    className={`${ isFullscreen ? 'h-screen': '' } w-full md:h-auto relative`}
+                                    iframeClassName={`${ isFullscreen ? 'h-screen': '' } w-full md:h-auto md:aspect-video`}
+                                    videoId={videoId} 
+                                    onReady={onReady} 
+                                    // onPlay={onPlay} 
+                                    // onPause={onPause}
+                                    onPlay={ () => setIsPlaying(true) } 
+                                    onPause={ () => setIsPlaying(false) }
+                                    opts={opts}
+                                />
+                                <div className={`absolute w-full px-7 text-center bottom-12 leading-tight ${ isFullscreen ? 'text-[2vw]' : 'text-[2vw] md:text-[1.5vw]'}`}>
+                                    { displayingSub.length > 0 && displayingSub.map( ( sub, idx ) => (
+                                        <span className="subtitle bg-black/60 inline-block px-2" key={idx} dangerouslySetInnerHTML={{__html: sub.text}} />
+                                    ) )}
+                                </div>
+                            </div>
+                            { isFullscreen && 
+                                <button className="absolute right-0 top-full" onClick={handleExitFullscreen}>Exit fullscreen</button>
+                            }
+                            { ! isFullscreen && 
+                                <div className="flex px-4 py-2">
+
+                                    <button className="whitespace-nowrap pl-3 underline ml-auto" onClick={setFullscreen}>Watch in fullscreen</button>
+                                </div>
+                            }
+                        </div>
+                        <textarea className="w-full h-[200px]" value={ JSON.stringify( { slug: videoId, lang: "en", author: "Whisper AI + translated by deepl", subtitles: filteredSub } ) } readonly={true}></textarea>
+                    </div>
                 </div>
             </div>
         </div>
